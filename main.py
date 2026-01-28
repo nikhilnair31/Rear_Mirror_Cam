@@ -74,24 +74,26 @@ def main():
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
     cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
 
+    # --- WINDOW SETUP ---
     main_win = "REAR_VIEW"
-    cv2.namedWindow(main_win)
+    # Use WINDOW_NORMAL to allow manual resizing and Windows 11 Snapping
+    cv2.namedWindow(main_win, cv2.WINDOW_NORMAL)
+    # Keep the aspect ratio consistent during resize
+    cv2.setWindowProperty(main_win, cv2.WND_PROP_ASPECT_RATIO, cv2.WINDOW_KEEPRATIO)
 
     if args.calib:
-        cv2.namedWindow("ZOOM_SELECTOR")
-        cv2.namedWindow("KEYSTONE_ADJUST")
+        cv2.namedWindow("ZOOM_SELECTOR", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("KEYSTONE_ADJUST", cv2.WINDOW_NORMAL)
         cv2.setMouseCallback("ZOOM_SELECTOR", mouse_event_zoom)
         cv2.setMouseCallback("KEYSTONE_ADJUST", mouse_event_keystone)
 
     while True:
-        # Check if the main window was closed via the "X" button
-        # On Windows, a closed window returns -1.0
+        # Check for 'X' button click at start of loop
         if cv2.getWindowProperty(main_win, cv2.WND_PROP_VISIBLE) < 1:
             break
 
         ret, raw_frame = cap.read()
-        if not ret: 
-            break
+        if not ret: break
 
         full_frame = cv2.resize(raw_frame, (640, 480))
 
@@ -112,14 +114,16 @@ def main():
         matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
         final_view = cv2.warpPerspective(keystone_input, matrix, (640, 480))
 
-        # 4. SHOW WINDOWS
+        # 3. MIRROR FLIP
+        final_view = cv2.flip(final_view, 1)
+
+        # 4. SHOW
         cv2.imshow(main_win, final_view)
 
         if args.calib:
             z_ui = full_frame.copy()
             cv2.rectangle(z_ui, (zx, zy), (zx+zw, zy+zh), (0, 255, 255), 2)
             cv2.imshow("ZOOM_SELECTOR", z_ui)
-
             k_ui = keystone_input.copy()
             pts_arr = np.array(config["points"], np.int32)
             cv2.polylines(k_ui, [pts_arr], True, (255, 0, 0), 2)
@@ -127,21 +131,19 @@ def main():
                 cv2.circle(k_ui, (int(p[0]), int(p[1])), 6, (0, 255, 0), -1)
             cv2.imshow("KEYSTONE_ADJUST", k_ui)
 
-        # 5. KEYBOARD INPUT
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
         elif key == ord('r'):
             config["zoom_roi"] = [0, 0, 640, 480]
             config["points"] = [[0, 0], [640, 0], [640, 480], [0, 480]]
-        elif key == ord('=') or key == ord('+'):
+        elif key in [ord('='), ord('+')]:
             config["exposure"] += 1
             cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
         elif key == ord('-'):
             config["exposure"] -= 1
             cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
 
-    # SAVE AND CLEANUP (Happens after loop breaks via Q or X)
     save_config(config)
     cap.release()
     cv2.destroyAllWindows()
