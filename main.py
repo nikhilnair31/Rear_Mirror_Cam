@@ -1,18 +1,17 @@
 import cv2
-import sys
 import numpy as np
 import argparse
 import json
 import os
+import sys
 
-# Update the CONFIG_FILE path logic
+# --- EXE PATH LOGIC ---
 if getattr(sys, 'frozen', False):
-    # If running as an EXE
     BASE_PATH = os.path.dirname(sys.executable)
 else:
-    # If running as a script
     BASE_PATH = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = "config.json"
+
+CONFIG_FILE = os.path.join(BASE_PATH, "config.json")
 
 DEFAULT_CONFIG = {
     "points": [[0, 0], [640, 0], [640, 480], [0, 480]],
@@ -75,16 +74,24 @@ def main():
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
     cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
 
+    main_win = "REAR_VIEW"
+    cv2.namedWindow(main_win)
+
     if args.calib:
         cv2.namedWindow("ZOOM_SELECTOR")
         cv2.namedWindow("KEYSTONE_ADJUST")
         cv2.setMouseCallback("ZOOM_SELECTOR", mouse_event_zoom)
         cv2.setMouseCallback("KEYSTONE_ADJUST", mouse_event_keystone)
-        print("CONTROLS: Right-Click Drag (Zoom) | Left-Click Drag (Keystone) | 'r' Reset | 'q' Save")
 
     while True:
+        # Check if the main window was closed via the "X" button
+        # On Windows, a closed window returns -1.0
+        if cv2.getWindowProperty(main_win, cv2.WND_PROP_VISIBLE) < 1:
+            break
+
         ret, raw_frame = cap.read()
-        if not ret: break
+        if not ret: 
+            break
 
         full_frame = cv2.resize(raw_frame, (640, 480))
 
@@ -92,22 +99,21 @@ def main():
         zx, zy, zw, zh = config["zoom_roi"]
         zx, zy = max(0, min(zx, 630)), max(0, min(zy, 470))
         zw, zh = max(10, min(zw, 640-zx)), max(10, min(zh, 480-zy))
-        
         zoomed_area = full_frame[zy:zy+zh, zx:zx+zw]
         
-        # Crash prevention: ensure zoomed_area isn't empty
         if zoomed_area.size == 0:
             keystone_input = full_frame
         else:
             keystone_input = cv2.resize(zoomed_area, (640, 480))
 
-        # 2. APPLY KEYSTONE (Crucial Fix: Cast to float32)
+        # 2. APPLY KEYSTONE
         src_pts = np.float32(config["points"])
         dst_pts = np.float32([[0, 0], [640, 0], [640, 480], [0, 480]])
-        
-        # This function fails if inputs aren't float32 or if points are invalid
         matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
         final_view = cv2.warpPerspective(keystone_input, matrix, (640, 480))
+
+        # 4. SHOW WINDOWS
+        cv2.imshow(main_win, final_view)
 
         if args.calib:
             z_ui = full_frame.copy()
@@ -121,11 +127,9 @@ def main():
                 cv2.circle(k_ui, (int(p[0]), int(p[1])), 6, (0, 255, 0), -1)
             cv2.imshow("KEYSTONE_ADJUST", k_ui)
 
-        cv2.imshow("REAR_VIEW", final_view)
-
+        # 5. KEYBOARD INPUT
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
-            save_config(config)
             break
         elif key == ord('r'):
             config["zoom_roi"] = [0, 0, 640, 480]
@@ -137,6 +141,8 @@ def main():
             config["exposure"] -= 1
             cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
 
+    # SAVE AND CLEANUP (Happens after loop breaks via Q or X)
+    save_config(config)
     cap.release()
     cv2.destroyAllWindows()
 
