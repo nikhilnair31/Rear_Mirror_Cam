@@ -1,9 +1,17 @@
 import cv2
+import sys
 import numpy as np
 import argparse
 import json
 import os
 
+# Update the CONFIG_FILE path logic
+if getattr(sys, 'frozen', False):
+    # If running as an EXE
+    BASE_PATH = os.path.dirname(sys.executable)
+else:
+    # If running as a script
+    BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = "config.json"
 
 DEFAULT_CONFIG = {
