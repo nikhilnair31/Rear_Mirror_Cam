@@ -5,6 +5,10 @@ import json
 import os
 import sys
 
+# --- HARDCODE YOUR CAMERA ID HERE ---
+# If 0 is your webcam and 1 is the mirror camera, set this to 1
+CAMERA_TO_USE = 0
+
 # --- EXE PATH LOGIC ---
 if getattr(sys, 'frozen', False):
     BASE_PATH = os.path.dirname(sys.executable)
@@ -16,8 +20,8 @@ CONFIG_FILE = os.path.join(BASE_PATH, "config.json")
 DEFAULT_CONFIG = {
     "points": [[0, 0], [640, 0], [640, 480], [0, 480]],
     "zoom_roi": [0, 0, 640, 480], 
-    "exposure": -5,
-    "camera_id": 1
+    "exposure": -3,
+    "camera_id": CAMERA_TO_USE
 }
 
 def load_config():
@@ -61,24 +65,49 @@ def mouse_event_keystone(event, x, y, flags, param):
 
 def main():
     global config
+    
+    print("--- Scanning for available cameras ---")
+    available_cameras = []
+    # Test first 5 indexes
+    for i in range(5):
+        # Trying without CAP_DSHOW first to avoid the index warning
+        test_cap = cv2.VideoCapture(i)
+        if test_cap.isOpened():
+            ret, frame = test_cap.read()
+            if ret:
+                print(f"ID {i}: Found")
+                available_cameras.append(i)
+                # Show a quick preview of which camera is which
+                cv2.imshow(f"Preview ID {i}", frame)
+                cv2.waitKey(500) 
+                cv2.destroyWindow(f"Preview ID {i}")
+            test_cap.release()
+
+    if not available_cameras:
+        print("No cameras detected!")
+        return
+
+    print(f"Available IDs: {available_cameras}")
+    print(f"--- Using Hardcoded ID: {CAMERA_TO_USE} ---")
+
     config = load_config()
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--calib', action='store_true')
     args = parser.parse_args()
 
-    # Try standard backend first for camera index 1
-    cap = cv2.VideoCapture(config["camera_id"])
+    cap = cv2.VideoCapture(config["camera_id"], cv2.CAP_DSHOW)
     if not cap.isOpened():
-        # Fallback to DSHOW if standard fails
-        cap = cv2.VideoCapture(config["camera_id"], cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 
-    # Set initial properties
-    # 0.75 or 1 usually triggers Auto-Exposure
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75) 
-    
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+    cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
+
+    # --- WINDOW SETUP ---
     main_win = "REAR_VIEW"
+    # Use WINDOW_NORMAL to allow manual resizing and Windows 11 Snapping
     cv2.namedWindow(main_win, cv2.WINDOW_NORMAL)
+    # Keep the aspect ratio consistent during resize
     cv2.setWindowProperty(main_win, cv2.WND_PROP_ASPECT_RATIO, cv2.WINDOW_KEEPRATIO)
 
     if args.calib:
@@ -88,11 +117,12 @@ def main():
         cv2.setMouseCallback("KEYSTONE_ADJUST", mouse_event_keystone)
 
     while True:
+        # Check for 'X' button click at start of loop
+        if cv2.getWindowProperty(main_win, cv2.WND_PROP_VISIBLE) < 1:
+            break
+
         ret, raw_frame = cap.read()
-        if not ret:
-            # If the camera disconnects or fails, don't crash
-            if cv2.waitKey(1) & 0xFF == ord('q'): break
-            continue
+        if not ret: break
 
         full_frame = cv2.resize(raw_frame, (640, 480))
 
@@ -113,6 +143,9 @@ def main():
         matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
         final_view = cv2.warpPerspective(keystone_input, matrix, (640, 480))
 
+        # 3. MIRROR FLIP
+        final_view = cv2.flip(final_view, 1)
+
         # 4. SHOW
         cv2.imshow(main_win, final_view)
 
@@ -120,7 +153,6 @@ def main():
             z_ui = full_frame.copy()
             cv2.rectangle(z_ui, (zx, zy), (zx+zw, zy+zh), (0, 255, 255), 2)
             cv2.imshow("ZOOM_SELECTOR", z_ui)
-            
             k_ui = keystone_input.copy()
             pts_arr = np.array(config["points"], np.int32)
             cv2.polylines(k_ui, [pts_arr], True, (255, 0, 0), 2)
@@ -136,15 +168,10 @@ def main():
             config["points"] = [[0, 0], [640, 0], [640, 480], [0, 480]]
         elif key in [ord('='), ord('+')]:
             config["exposure"] += 1
-            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25) # Switch to manual to apply
             cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
         elif key == ord('-'):
             config["exposure"] -= 1
-            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25) # Switch to manual to apply
             cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
-
-        if cv2.getWindowProperty(main_win, cv2.WND_PROP_VISIBLE) < 1:
-            break
 
     save_config(config)
     cap.release()
