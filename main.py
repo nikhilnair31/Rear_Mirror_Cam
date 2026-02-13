@@ -17,7 +17,7 @@ DEFAULT_CONFIG = {
     "points": [[0, 0], [640, 0], [640, 480], [0, 480]],
     "zoom_roi": [0, 0, 640, 480], 
     "exposure": -5,
-    "gamma": 0.7,  # Added: Values < 1.0 darken highlights
+    "gamma": 0.7,
     "camera_id": 0
 }
 
@@ -34,8 +34,7 @@ def save_config(data):
         json.dump(data, f, indent=4)
 
 def apply_gamma(image, gamma=1.0):
-    """Adjusts the luminance of the image. Gamma < 1.0 reduces 'blown out' look."""
-    invGamma = 1.0 / gamma
+    invGamma = 1.0 / max(0.01, gamma)
     table = np.array([((i / 255.0) ** invGamma) * 255
                       for i in np.arange(0, 256)]).astype("uint8")
     return cv2.LUT(image, table)
@@ -75,23 +74,30 @@ def main():
     parser.add_argument('--calib', action='store_true')
     args = parser.parse_args()
 
+    # Track if we are currently in calibration mode
+    is_calibrating = args.calib
+
     cap = cv2.VideoCapture(config["camera_id"], cv2.CAP_DSHOW)
-    
-    # Try to disable Auto Exposure to prevent the "blown out" hunting
-    # 1 = Manual Mode for many DSHOW cameras
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1) 
     cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
 
     main_win = "REAR_VIEW"
     cv2.namedWindow(main_win, cv2.WINDOW_NORMAL)
 
-    if args.calib:
+    def setup_calib_windows():
         cv2.namedWindow("ZOOM_SELECTOR", cv2.WINDOW_NORMAL)
         cv2.namedWindow("KEYSTONE_ADJUST", cv2.WINDOW_NORMAL)
         cv2.setMouseCallback("ZOOM_SELECTOR", mouse_event_zoom)
         cv2.setMouseCallback("KEYSTONE_ADJUST", mouse_event_keystone)
 
-    print("Controls: [+] Exposure Up, [-] Exposure Down, [8] Gamma Up, [2] Gamma Down, [Q] Quit")
+    if is_calibrating:
+        setup_calib_windows()
+
+    print("Controls:")
+    print(" [C] Toggle Calibration Mode")
+    print(" [+] Exposure Up, [-] Exposure Down")
+    print(" [8] Gamma Up,    [2] Gamma Down")
+    print(" [Q] Quit & Save")
 
     while True:
         ret, raw_frame = cap.read()
@@ -99,7 +105,7 @@ def main():
             if cv2.waitKey(30) & 0xFF == ord('q'): break
             continue
 
-        # 1. ROTATE & SCALE
+        # 1. ROTATE & SCALE (Adjusted logic to ensure portrait/landscape logic)
         rotated_frame = cv2.rotate(raw_frame, cv2.ROTATE_90_CLOCKWISE)
         full_frame = cv2.resize(rotated_frame, (480, 640))
         
@@ -117,12 +123,13 @@ def main():
         matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
         final_view = cv2.warpPerspective(keystone_input, matrix, (640, 480))
 
-        # 4. APPLY GAMMA (Software Light Correction)
+        # 4. APPLY GAMMA
         final_view = apply_gamma(final_view, config.get("gamma", 1.0))
 
         cv2.imshow(main_win, final_view)
 
-        if args.calib:
+        # 5. CALIBRATION OVERLAYS
+        if is_calibrating:
             z_ui = full_frame.copy()
             cv2.rectangle(z_ui, (zx, zy), (zx+zw, zy+zh), (0, 255, 255), 2)
             cv2.imshow("ZOOM_SELECTOR", z_ui)
@@ -135,16 +142,24 @@ def main():
             cv2.imshow("KEYSTONE_ADJUST", k_ui)
 
         key = cv2.waitKey(30) & 0xFF
-        if key == ord('q'):
+        
+        # TOGGLE CALIBRATION
+        if key == ord('c'):
+            is_calibrating = not is_calibrating
+            if is_calibrating:
+                setup_calib_windows()
+            else:
+                cv2.destroyWindow("ZOOM_SELECTOR")
+                cv2.destroyWindow("KEYSTONE_ADJUST")
+
+        elif key == ord('q'):
             break
-        # EXPOSURE CONTROLS
         elif key in [ord('='), ord('+')]:
             config["exposure"] += 1
             cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
         elif key == ord('-'):
             config["exposure"] -= 1
             cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
-        # GAMMA CONTROLS (Use Numpad 8 and 2, or standard keys)
         elif key == ord('8'):
             config["gamma"] = round(config.get("gamma", 1.0) + 0.05, 2)
         elif key == ord('2'):
