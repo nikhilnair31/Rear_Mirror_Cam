@@ -17,7 +17,8 @@ DEFAULT_CONFIG = {
     "points": [[0, 0], [640, 0], [640, 480], [0, 480]],
     "zoom_roi": [0, 0, 640, 480], 
     "exposure": -5,
-    "camera_id": 1
+    "gamma": 0.7,  # Added: Values < 1.0 darken highlights
+    "camera_id": 0
 }
 
 def load_config():
@@ -31,6 +32,13 @@ def load_config():
 def save_config(data):
     with open(CONFIG_FILE, 'w') as f:
         json.dump(data, f, indent=4)
+
+def apply_gamma(image, gamma=1.0):
+    """Adjusts the luminance of the image. Gamma < 1.0 reduces 'blown out' look."""
+    invGamma = 1.0 / gamma
+    table = np.array([((i / 255.0) ** invGamma) * 255
+                      for i in np.arange(0, 256)]).astype("uint8")
+    return cv2.LUT(image, table)
 
 # Interaction Globals
 selected_point = -1
@@ -67,19 +75,15 @@ def main():
     parser.add_argument('--calib', action='store_true')
     args = parser.parse_args()
 
-    # Try standard backend first for camera index 1
-    cap = cv2.VideoCapture(config["camera_id"])
-    if not cap.isOpened():
-        # Fallback to DSHOW if standard fails
-        cap = cv2.VideoCapture(config["camera_id"], cv2.CAP_DSHOW)
-
-    # Set initial properties
-    # 0.75 or 1 usually triggers Auto-Exposure
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75) 
+    cap = cv2.VideoCapture(config["camera_id"], cv2.CAP_DSHOW)
     
+    # Try to disable Auto Exposure to prevent the "blown out" hunting
+    # 1 = Manual Mode for many DSHOW cameras
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1) 
+    cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
+
     main_win = "REAR_VIEW"
     cv2.namedWindow(main_win, cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty(main_win, cv2.WND_PROP_ASPECT_RATIO, cv2.WINDOW_KEEPRATIO)
 
     if args.calib:
         cv2.namedWindow("ZOOM_SELECTOR", cv2.WINDOW_NORMAL)
@@ -87,33 +91,35 @@ def main():
         cv2.setMouseCallback("ZOOM_SELECTOR", mouse_event_zoom)
         cv2.setMouseCallback("KEYSTONE_ADJUST", mouse_event_keystone)
 
+    print("Controls: [+] Exposure Up, [-] Exposure Down, [8] Gamma Up, [2] Gamma Down, [Q] Quit")
+
     while True:
         ret, raw_frame = cap.read()
         if not ret:
-            # If the camera disconnects or fails, don't crash
             if cv2.waitKey(1) & 0xFF == ord('q'): break
             continue
 
-        full_frame = cv2.resize(raw_frame, (640, 480))
-
-        # 1. APPLY ZOOM
+        # 1. ROTATE & SCALE
+        rotated_frame = cv2.rotate(raw_frame, cv2.ROTATE_90_CLOCKWISE)
+        full_frame = cv2.resize(rotated_frame, (480, 640))
+        
+        # 2. APPLY ZOOM
         zx, zy, zw, zh = config["zoom_roi"]
-        zx, zy = max(0, min(zx, 630)), max(0, min(zy, 470))
-        zw, zh = max(10, min(zw, 640-zx)), max(10, min(zh, 480-zy))
+        zx, zy = max(0, min(zx, 470)), max(0, min(zy, 630))
+        zw, zh = max(10, min(zw, 480-zx)), max(10, min(zh, 640-zy))
         zoomed_area = full_frame[zy:zy+zh, zx:zx+zw]
         
-        if zoomed_area.size == 0:
-            keystone_input = full_frame
-        else:
-            keystone_input = cv2.resize(zoomed_area, (640, 480))
+        keystone_input = cv2.resize(zoomed_area, (640, 480)) if zoomed_area.size != 0 else full_frame
 
-        # 2. APPLY KEYSTONE
+        # 3. APPLY KEYSTONE
         src_pts = np.float32(config["points"])
         dst_pts = np.float32([[0, 0], [640, 0], [640, 480], [0, 480]])
         matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
         final_view = cv2.warpPerspective(keystone_input, matrix, (640, 480))
 
-        # 4. SHOW
+        # 4. APPLY GAMMA (Software Light Correction)
+        final_view = apply_gamma(final_view, config.get("gamma", 1.0))
+
         cv2.imshow(main_win, final_view)
 
         if args.calib:
@@ -131,17 +137,18 @@ def main():
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
-        elif key == ord('r'):
-            config["zoom_roi"] = [0, 0, 640, 480]
-            config["points"] = [[0, 0], [640, 0], [640, 480], [0, 480]]
+        # EXPOSURE CONTROLS
         elif key in [ord('='), ord('+')]:
             config["exposure"] += 1
-            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25) # Switch to manual to apply
             cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
         elif key == ord('-'):
             config["exposure"] -= 1
-            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25) # Switch to manual to apply
             cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
+        # GAMMA CONTROLS (Use Numpad 8 and 2, or standard keys)
+        elif key == ord('8'):
+            config["gamma"] = round(config.get("gamma", 1.0) + 0.05, 2)
+        elif key == ord('2'):
+            config["gamma"] = max(0.1, round(config.get("gamma", 1.0) - 0.05, 2))
 
         if cv2.getWindowProperty(main_win, cv2.WND_PROP_VISIBLE) < 1:
             break
