@@ -58,12 +58,24 @@ def mouse_event_zoom(event, x, y, flags, param):
 
 def mouse_event_keystone(event, x, y, flags, param):
     global config, selected_point
+    
     if event == cv2.EVENT_LBUTTONDOWN:
-        for i, p in enumerate(config["points"]):
-            if abs(x - p[0]) < 20 and abs(y - p[1]) < 20:
-                selected_point = i
-    elif event == cv2.EVENT_MOUSEMOVE and selected_point != -1:
+        # Calculate Euclidean distance to all 4 points
+        distances = []
+        for p in config["points"]:
+            dist = np.sqrt((x - p[0])**2 + (y - p[1])**2)
+            distances.append(dist)
+        
+        # Find the index of the closest point
+        selected_point = np.argmin(distances)
+        
+        # Instantly move that point to the click location
         config["points"][selected_point] = [x, y]
+        
+    elif event == cv2.EVENT_MOUSEMOVE and selected_point != -1:
+        # Allow dragging after the initial click
+        config["points"][selected_point] = [x, y]
+        
     elif event == cv2.EVENT_LBUTTONUP:
         selected_point = -1
 
