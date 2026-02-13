@@ -34,7 +34,8 @@ def save_config(data):
         json.dump(data, f, indent=4)
 
 def apply_gamma(image, gamma=1.0):
-    invGamma = 1.0 / max(0.01, gamma)
+    gamma = max(0.01, gamma)
+    invGamma = 1.0 / gamma
     table = np.array([((i / 255.0) ** invGamma) * 255
                       for i in np.arange(0, 256)]).astype("uint8")
     return cv2.LUT(image, table)
@@ -74,7 +75,6 @@ def main():
     parser.add_argument('--calib', action='store_true')
     args = parser.parse_args()
 
-    # Track if we are currently in calibration mode
     is_calibrating = args.calib
 
     cap = cv2.VideoCapture(config["camera_id"], cv2.CAP_DSHOW)
@@ -83,21 +83,21 @@ def main():
 
     main_win = "REAR_VIEW"
     cv2.namedWindow(main_win, cv2.WINDOW_NORMAL)
+    
+    # FORCE NORMAL ARROW CURSOR FOR MAIN WINDOW
+    # (Setting to -1 or a standard ID prevents the crosshair default in some CV builds)
+    # If you want to HIDE it entirely, use cv2.WND_PROP_FULLSCREEN but that's overkill.
+    # Instead, we set the window property to normal.
+    cv2.setWindowProperty(main_win, cv2.WND_PROP_ASPECT_RATIO, cv2.WINDOW_KEEPRATIO)
 
-    def setup_calib_windows():
+    def setup_calib_ui():
         cv2.namedWindow("ZOOM_SELECTOR", cv2.WINDOW_NORMAL)
         cv2.namedWindow("KEYSTONE_ADJUST", cv2.WINDOW_NORMAL)
         cv2.setMouseCallback("ZOOM_SELECTOR", mouse_event_zoom)
         cv2.setMouseCallback("KEYSTONE_ADJUST", mouse_event_keystone)
 
     if is_calibrating:
-        setup_calib_windows()
-
-    print("Controls:")
-    print(" [C] Toggle Calibration Mode")
-    print(" [+] Exposure Up, [-] Exposure Down")
-    print(" [8] Gamma Up,    [2] Gamma Down")
-    print(" [Q] Quit & Save")
+        setup_calib_ui()
 
     while True:
         ret, raw_frame = cap.read()
@@ -105,30 +105,23 @@ def main():
             if cv2.waitKey(30) & 0xFF == ord('q'): break
             continue
 
-        # 1. ROTATE & SCALE (Adjusted logic to ensure portrait/landscape logic)
         rotated_frame = cv2.rotate(raw_frame, cv2.ROTATE_90_CLOCKWISE)
         full_frame = cv2.resize(rotated_frame, (480, 640))
         
-        # 2. APPLY ZOOM
         zx, zy, zw, zh = config["zoom_roi"]
         zx, zy = max(0, min(zx, 470)), max(0, min(zy, 630))
         zw, zh = max(10, min(zw, 480-zx)), max(10, min(zh, 640-zy))
         zoomed_area = full_frame[zy:zy+zh, zx:zx+zw]
         
         keystone_input = cv2.resize(zoomed_area, (640, 480)) if zoomed_area.size != 0 else full_frame
-
-        # 3. APPLY KEYSTONE
         src_pts = np.float32(config["points"])
         dst_pts = np.float32([[0, 0], [640, 0], [640, 480], [0, 480]])
         matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
         final_view = cv2.warpPerspective(keystone_input, matrix, (640, 480))
-
-        # 4. APPLY GAMMA
         final_view = apply_gamma(final_view, config.get("gamma", 1.0))
 
         cv2.imshow(main_win, final_view)
 
-        # 5. CALIBRATION OVERLAYS
         if is_calibrating:
             z_ui = full_frame.copy()
             cv2.rectangle(z_ui, (zx, zy), (zx+zw, zy+zh), (0, 255, 255), 2)
@@ -143,17 +136,18 @@ def main():
 
         key = cv2.waitKey(30) & 0xFF
         
-        # TOGGLE CALIBRATION
-        if key == ord('c'):
+        if key == ord('q'):
+            break
+        elif key == ord('c'):
             is_calibrating = not is_calibrating
             if is_calibrating:
-                setup_calib_windows()
+                setup_calib_ui()
             else:
-                cv2.destroyWindow("ZOOM_SELECTOR")
-                cv2.destroyWindow("KEYSTONE_ADJUST")
+                if cv2.getWindowProperty("ZOOM_SELECTOR", cv2.WND_PROP_VISIBLE) >= 0:
+                    cv2.destroyWindow("ZOOM_SELECTOR")
+                if cv2.getWindowProperty("KEYSTONE_ADJUST", cv2.WND_PROP_VISIBLE) >= 0:
+                    cv2.destroyWindow("KEYSTONE_ADJUST")
 
-        elif key == ord('q'):
-            break
         elif key in [ord('='), ord('+')]:
             config["exposure"] += 1
             cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
