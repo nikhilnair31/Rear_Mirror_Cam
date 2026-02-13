@@ -96,7 +96,7 @@ def main():
     while True:
         ret, raw_frame = cap.read()
         if not ret:
-            if cv2.waitKey(1) & 0xFF == ord('q'): break
+            if cv2.waitKey(30) & 0xFF == ord('q'): break
             continue
 
         # 1. ROTATE & SCALE
@@ -134,7 +134,7 @@ def main():
                 cv2.circle(k_ui, (int(p[0]), int(p[1])), 6, (0, 255, 0), -1)
             cv2.imshow("KEYSTONE_ADJUST", k_ui)
 
-        key = cv2.waitKey(1) & 0xFF
+        key = cv2.waitKey(30) & 0xFF
         if key == ord('q'):
             break
         # EXPOSURE CONTROLS
