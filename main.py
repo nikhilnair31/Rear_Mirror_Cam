@@ -5,13 +5,22 @@ import os
 import sys
 import argparse
 
+# --- RESOLUTION SETTINGS ---
+# Change these if you want 720p (1280x720) or 4K (3840x2160)
+FINAL_W = 1920
+FINAL_H = 1080
+# Since the image is rotated 90 degrees, the intermediate dimensions are swapped
+ROT_W = FINAL_H
+ROT_H = FINAL_W
+
 # --- PATH & CONFIG ---
 BASE_PATH = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_PATH, "config.json")
 
 DEFAULT_CONFIG = {
-    "points": [[50, 50], [590, 50], [590, 430], [50, 430]],
-    "zoom_roi": [0, 0, 480, 640], 
+    # Default keystone points scaled to the new FINAL_W and FINAL_H
+    "points": [[100, 100], [FINAL_W - 100, 100], [FINAL_W - 100, FINAL_H - 100], [100, FINAL_H - 100]],
+    "zoom_roi": [0, 0, ROT_W, ROT_H], 
     "exposure": -5,
     "camera_id": 0
 }
@@ -19,8 +28,10 @@ DEFAULT_CONFIG = {
 def load_config():
     try:
         if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'r') as f: return json.load(f)
-    except: pass
+            with open(CONFIG_FILE, 'r') as f: 
+                return json.load(f)
+    except: 
+        pass
     return DEFAULT_CONFIG.copy()
 
 def save_config(data):
@@ -47,10 +58,12 @@ def get_bright_corners(frame):
     thresh = cv2.dilate(thresh, kernel, iterations=1)
     
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours: return None, thresh
+    if not contours: 
+        return None, thresh
 
     c = max(contours, key=cv2.contourArea)
-    if cv2.contourArea(c) < 3000: return None, thresh
+    if cv2.contourArea(c) < 3000: 
+        return None, thresh
     
     hull = cv2.convexHull(c)
     peri = cv2.arcLength(hull, True)
@@ -103,43 +116,45 @@ def main():
 
     cap = cv2.VideoCapture(config["camera_id"], cv2.CAP_DSHOW)
     
-    # Request 1080p (or change to your camera's max resolution like 1280x720)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-    
+    # Request higher resolution from the camera hardware
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FINAL_W)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FINAL_H)
     cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
     
     cv2.namedWindow("FINAL_VIEW", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("FINAL_VIEW", 640, 480)
+    cv2.resizeWindow("FINAL_VIEW", FINAL_W, FINAL_H)
 
     def update_window_visibility():
         if calib_mode:
             cv2.namedWindow("ZOOM_SELECTOR", cv2.WINDOW_NORMAL)
-            cv2.resizeWindow("ZOOM_SELECTOR", 640, 480)
+            cv2.resizeWindow("ZOOM_SELECTOR", ROT_W, ROT_H)
             cv2.setMouseCallback("ZOOM_SELECTOR", mouse_zoom)
             
             cv2.namedWindow("KEYSTONE_DEBUG", cv2.WINDOW_NORMAL)
-            cv2.resizeWindow("KEYSTONE_DEBUG", 640, 480)
+            cv2.resizeWindow("KEYSTONE_DEBUG", FINAL_W, FINAL_H)
             cv2.setMouseCallback("KEYSTONE_DEBUG", mouse_keystone)
         else:
             try:
                 cv2.destroyWindow("ZOOM_SELECTOR")
                 cv2.destroyWindow("KEYSTONE_DEBUG")
-            except: pass
+            except: 
+                pass
 
     update_window_visibility()
 
     while True:
         ret, frame = cap.read()
-        if not ret: break
+        if not ret: 
+            break
 
         frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        frame = cv2.resize(frame, (480, 640)) 
+        frame = cv2.resize(frame, (ROT_W, ROT_H)) 
         
         zx, zy, zw, zh = config["zoom_roi"]
-        zoomed = frame[max(0,zy):min(640,zy+zh), max(0,zx):min(480,zx+zw)]
-        if zoomed.size == 0: zoomed = frame
-        k_input = cv2.resize(zoomed, (640, 480))
+        zoomed = frame[max(0, zy):min(ROT_H, zy+zh), max(0, zx):min(ROT_W, zx+zw)]
+        if zoomed.size == 0: 
+            zoomed = frame
+        k_input = cv2.resize(zoomed, (FINAL_W, FINAL_H))
 
         # 1. Tracking and UI Processing
         new_pts, thresh_raw = get_bright_corners(k_input)
@@ -151,11 +166,12 @@ def main():
         # 2. Final Warp (Always show)
         try:
             src = np.float32(config["points"])
-            dst = np.float32([[0, 0], [640, 0], [640, 480], [0, 480]])
+            dst = np.float32([[0, 0], [FINAL_W, 0], [FINAL_W, FINAL_H], [0, FINAL_H]])
             M = cv2.getPerspectiveTransform(src, dst)
-            final = cv2.warpPerspective(k_input, M, (640, 480))
+            final = cv2.warpPerspective(k_input, M, (FINAL_W, FINAL_H))
             cv2.imshow("FINAL_VIEW", final)
-        except: pass
+        except: 
+            pass
 
         # 3. Handle Calibration Windows
         if calib_mode:
@@ -169,7 +185,7 @@ def main():
             cv2.putText(debug_view, status, (10, 30), 1, 1.5, (0, 0, 255), 2)
             
             if save_tick > 0:
-                cv2.putText(debug_view, "SAVED!", (230, 240), 1, 3.0, (0, 255, 0), 4)
+                cv2.putText(debug_view, "SAVED!", (FINAL_W // 2 - 100, FINAL_H // 2), 1, 3.0, (0, 255, 0), 4)
                 save_tick -= 1
             cv2.imshow("KEYSTONE_DEBUG", debug_view)
 
@@ -191,7 +207,7 @@ def main():
         elif key == ord('a'): 
             auto_track = not auto_track
         elif key == ord('r'): 
-            config["zoom_roi"] = [0, 0, 480, 640]
+            config["zoom_roi"] = [0, 0, ROT_W, ROT_H]
         elif key == ord('='): 
             config["exposure"] += 1
             cap.set(cv2.CAP_PROP_EXPOSURE, config["exposure"])
